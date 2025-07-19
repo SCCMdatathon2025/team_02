@@ -3,7 +3,7 @@ import os
 import pandas as pd
 from google.cloud import bigquery
 
-client = bigquery.Client(project="escim-datathon-2")
+client = bigquery.Client(project="sepsis-nlp")
 
 GLOBAL_DIR = "data_cache"
 

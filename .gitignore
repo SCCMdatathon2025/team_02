@@ -32,7 +32,6 @@ wheels/
 
 # Virtual environments
 venv/
-
 .venv
 env/
 ENV/
@@ -54,3 +53,7 @@ Thumbs.db
 .pytest_cache/ 
 
 *.csv
+
+# R
+.Rhistory
+.RData

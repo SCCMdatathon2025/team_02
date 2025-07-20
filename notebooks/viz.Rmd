@@ -1,0 +1,270 @@
+---
+title: "sccm-datathon-2025"
+author: "Zewei (Whiskey) Liao"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(scales)
+library(lubridate)
+```
+
+```{r}
+df <- read_csv("data/cohort_flags.csv")
+```
+
+```{r}
+df_avg <- df %>%
+  mutate(
+    total_interventions = rowSums(across(c(
+      steroid_flag,
+      narcotic_flag,
+      sedative_flag,
+      vasopressor_flag,
+      nasal_canula_mask,
+      hiflo_oximyzer,
+      cpap_bipap,
+      mechanical_ventilation,
+      ecmo,
+      dialysis
+    ), .fns = ~ replace_na(.x, 0))),
+    age = interval(birth_datetime, visit_start_datetime) %/% years(1),
+    los = as.integer(difftime(visit_end_datetime, visit_start_datetime, units = "days"))
+  ) %>%
+  select(
+    # id
+    person_id,
+    visit_occurrence_id,
+    
+    # demog
+    age,
+    race_name,
+    ethnicity_name,
+    gender_name,
+    site_location,
+    
+    # outcome
+    died_in_hospital,
+    died_in_30_days,
+    los,
+    
+    # drugs
+    steroid_flag,
+    narcotic_flag,
+    sedative_flag,
+    vasopressor_flag,
+
+    # devices
+    nasal_canula_mask,
+    hiflo_oximyzer,
+    cpap_bipap,
+    mechanical_ventilation,
+    
+    # procedures
+    ecmo,
+    dialysis,
+    
+    total_interventions
+  ) %>%
+  group_by(race_name, gender_name, site_location) %>%
+  summarise(
+    count = n(),
+    mean_age = mean(age, na.rm = TRUE),
+    
+    # outcome
+    mean_los = mean(los, na.rm = TRUE),
+    mean_died_in_hospital_ou = mean(died_in_hospital, na.rm = TRUE),
+    mean_died_in_30_days_ou = mean(died_in_30_days, na.rm = TRUE),
+    
+    # drugs
+    mean_steroid_dr = mean(steroid_flag, na.rm = TRUE),
+    mean_narcotic_dr = mean(narcotic_flag, na.rm = TRUE),
+    mean_sedative_dr = mean(sedative_flag, na.rm = TRUE),
+    mean_vasopressor_dr = mean(vasopressor_flag, na.rm = TRUE),
+    mean_dr = mean_steroid_dr + mean_narcotic_dr + mean_sedative_dr + mean_vasopressor_dr,
+    
+    # devices
+    mean_nasal_canula_mask_de = mean(nasal_canula_mask, na.rm = TRUE),
+    mean_hiflo_oximyzer_de = mean(hiflo_oximyzer, na.rm = TRUE),
+    mean_cpap_bipap_de = mean(cpap_bipap, na.rm = TRUE),
+    mean_mechanical_ventilation_de = mean(mechanical_ventilation, na.rm = TRUE),
+    mean_de = mean_nasal_canula_mask_de + mean_hiflo_oximyzer_de + mean_cpap_bipap_de + mean_mechanical_ventilation_de,
+    
+    # procedures
+    mean_ecmo_pr = mean(ecmo, na.rm = TRUE),
+    mean_dialysis_pr = mean(dialysis, na.rm = TRUE),
+    
+    mean_total = mean(total_interventions, na.rm = TRUE)
+  )   %>%
+  mutate(
+    gender_name = recode(gender_name,
+      "MALE" = "Male",
+      "FEMALE" = "Female"
+    ),
+    race_name = factor(race_name, levels = c("White", "Black", "Asian", "Other", "Not Reported")),
+    gender_name = factor(gender_name, levels = c("Male", "Female")),
+    site_location = recode(site_location,
+      "MW" = "Midwest",
+      "NE" = "Northeast",
+      "SE" = "Southeast"
+    )
+  )
+```
+
+# Viz
+
+```{r}
+df_avg %>%
+  ggplot(aes(x = race_name, y = mean_total, fill = gender_name, group = gender_name)) +
+  geom_col(position = position_dodge(width = 0.9), width = 0.8) +
+  geom_text(
+    aes(label = round(mean_total * 100, 1)),  # show as number without %
+    position = position_dodge(width = 0.9),
+    vjust = -0.5,
+    size = 2.8  # smaller font size
+  ) +
+  facet_wrap(~ site_location) +
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1),
+    limits = c(0, max(df_avg$mean_died_in_hospital_ou, na.rm = TRUE) * 1.15)
+  ) +
+  scale_fill_manual(
+    values = c("Male" = "#0072B2", "Female" = "#D55E00"),
+    drop = FALSE
+  ) +
+  labs(
+    title = "Total Interventions",
+    subtitle = "by Race, Gender, and Site",
+    x = "Race",
+    y = "Total Interventions",
+    fill = "Gender"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold"),
+    strip.text = element_text(face = "bold")
+  )
+
+```
+
+
+# Loop
+
+```{r}
+plot_outcome_by_race_gender_site <- function(data, outcome_var, title_name = NULL, output_file = NULL) {
+  outcome_sym <- rlang::sym(outcome_var)
+
+  plot_data <- data %>%
+    mutate(
+      gender_name = recode(gender_name,
+        "MALE" = "Male",
+        "FEMALE" = "Female"
+      ),
+      race_name = factor(race_name, levels = c("White", "Black", "Asian", "Other", "Not Reported"))
+    )
+
+  # Default to variable name as title if none provided
+  plot_title <- if (!is.null(title_name)) {
+    title_name
+  } else {
+    outcome_var %>%
+      str_replace_all("mean_", "") %>%
+      str_replace_all("_", " ") %>%
+      str_to_title()
+  }
+
+  p <- ggplot(plot_data, aes(x = race_name, y = !!outcome_sym, fill = gender_name, group = gender_name)) +
+    geom_col(position = position_dodge(width = 0.9), width = 0.8) +
+    geom_text(
+      aes(label = round(!!outcome_sym * 100, 1)),
+      position = position_dodge(width = 0.9),
+      vjust = -0.5,
+      size = 2.8
+    ) +
+    facet_wrap(~ site_location) +
+    scale_y_continuous(
+      labels = scales::percent_format(accuracy = 1),
+      limits = c(0, max(pull(plot_data, !!outcome_sym), na.rm = TRUE) * 1.15)
+    ) +
+    scale_fill_manual(
+      values = c("Male" = "#0072B2", "Female" = "#D55E00"),
+      drop = FALSE
+    ) +
+    labs(
+      title = plot_title,
+      subtitle = "by Race, Gender, and Site",
+      x = "Race",
+      y = "Rate",
+      fill = "Gender"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      plot.title = element_text(face = "bold"),
+      strip.text = element_text(face = "bold")
+    )
+
+  if (!is.null(output_file)) {
+    ggsave(output_file, p, width = 9, height = 5.5, dpi = 300)
+  } else {
+    return(p)
+  }
+}
+```
+
+```{r}
+outcomes <- tibble::tibble(
+  var = c(
+    "mean_age",
+    "mean_los",
+    "mean_died_in_hospital_ou",
+    "mean_died_in_30_days_ou",
+    "mean_steroid_dr",
+    "mean_narcotic_dr",
+    "mean_sedative_dr",
+    "mean_vasopressor_dr",
+    "mean_dr",
+    "mean_nasal_canula_mask_de",
+    "mean_hiflo_oximyzer_de",
+    "mean_cpap_bipap_de",
+    "mean_mechanical_ventilation_de",
+    "mean_de",
+    "mean_ecmo_pr",
+    "mean_dialysis_pr",
+    "mean_total"
+  ),
+  title = c(
+    "Age",
+    "Length of Stay",
+    "In-Hospital Mortality",
+    "30-Day Mortality",
+    "Steroid Use",
+    "Narcotic Use",
+    "Sedative Use",
+    "Vasopressor Use",
+    "Total Drug Use",
+    "Nasal Cannula or Mask",
+    "High-Flow or Oxymyzer Use",
+    "CPAP or BiPAP Use",
+    "Mechanical Ventilation",
+    "Total Device Use",
+    "ECMO Use",
+    "Dialysis Use",
+    "Total Interventions"
+  )
+)
+
+for (i in seq_len(nrow(outcomes))) {
+  plot_outcome_by_race_gender_site(
+    data = df_avg,
+    outcome_var = outcomes$var[i],
+    title_name = outcomes$title[i],
+    output_file = paste0("graphs/fig_", outcomes$var[i], ".png")
+  )
+}
+```
+
